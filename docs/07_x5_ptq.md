@@ -1,150 +1,326 @@
 # Task07｜RDK X5 OpenExplorer PTQ 量化
 
 ## 目标
-理解并完成：
+
+完成：
+
 ```text
-FP32 ONNX → 模型检查 → 校准集 → PTQ → 定点模型 / BIN → 精度与性能检查
+FP32 ONNX
+   ↓
+Checker
+   ↓
+Calibration Data
+   ↓
+PTQ
+   ↓
+Quantized Model / BIN
+   ↓
+精度与性能检查
 ```
 
-**这一阶段的转换工作可以在 x86-64 PC/Docker 完成，不要求手边有 X5。**
-真正的 BPU 运行与摄像头接入等拿到 X5 后再做。
+这一阶段的**模型转换**可以在 x86-64 PC / Docker 中完成，不要求手边有 RDK X5。  
+真正的 BPU 实时推理、摄像头 NV12 接入、板端 ROS2/TROS 联调，等拿到 X5 后再做。
 
-## 1. 先理解三个概念
+---
 
-### ONNX
-跨框架模型格式，是 PC 训练和部署工具链之间的桥梁。
+## 1. 前置条件
 
-### PTQ
-Post Training Quantization。训练结束后，用代表性校准数据估计量化范围，将浮点网络转换为更适合 BPU 的定点模型。
+完成 Task06，并存在：
 
-### calibration dataset
-不是训练集。它不做梯度更新，而是让量化工具看到“真实输入通常长什么样”。
-
-## 2. X5 关键参数
-RDK X5 对应的 march 为：
 ```text
-bayes-e
-```
-
-## 3. 准备模型
-使用 Task06：
-```text
+vision/lane_resnet18.pt
 vision/lane_resnet18.onnx
+vision/data/
 ```
 
-先在 Python 中检查：
+先执行：
+
 ```bash
 cd ~/RDK-study/vision
 source .venv/bin/activate
-python - <<'PY'
-import onnx
-m=onnx.load("lane_resnet18.onnx")
-onnx.checker.check_model(m)
-print("ONNX OK")
-for x in m.graph.input: print("input:", x.name)
-for x in m.graph.output: print("output:", x.name)
-PY
+python verify_onnx.py
 ```
 
-## 4. 安装 OpenExplorer
-OpenExplorer 版本会更新，**不要从本教程复制一个永久固定的下载链接**。进入 D-Robotics 官方 OpenExplorer 文档，选择与 X5 SDK/比赛环境匹配的版本，并优先使用官方 Docker 镜像/安装说明。
+只有看到：
+
+```text
+PASS: PyTorch and ONNX outputs are consistent.
+```
+
+才继续 PTQ。
+
+---
+
+## 2. 理解 PTQ
+
+PTQ = Post Training Quantization。
+
+训练结束后，不再重新训练模型，而是使用一批代表性数据估计量化范围，把浮点模型转换为更适合 X5 BPU 的模型。
+
+---
+
+## 3. X5 关键参数
+
+RDK X5 对应：
+
+```text
+march: bayes-e
+```
+
+不要把 X3/X5 的 march 混用。
+
+---
+
+## 4. OpenExplorer 安装
+
+OpenExplorer 版本会随 SDK 更新，因此本仓库不写死永久下载地址。
 
 官方入口：
+
 https://developer.d-robotics.cc/oe_x5_doc/
 
-安装完成后记录：
-- OpenExplorer 版本
-- Docker 镜像 tag
-- hb_mapper/hb_model_info 版本
-- march=bayes-e
+建议：
 
-这些必须写进报告，避免队友环境不同无法复现。
+- 使用官方 Docker；
+- 记录镜像 tag；
+- 记录 OpenExplorer 版本；
+- 记录 hb_mapper / hb_model_info 版本。
 
-## 5. 做 64–100 张校准样本
-首次练习可从合成 train/val 选 64 张；正式比赛要换真实数据。
+---
 
-原则：
-- 覆盖直线/左右弯
-- 覆盖亮暗
-- 覆盖赛道偏左/居中/偏右
-- 不要只挑“最好看”的图片
-- test 集不要拿去做校准
+## 5. 生成 PTQ 校准数据
 
-你可以先：
-```bash
-mkdir -p ptq/calibration
-python - <<'PY'
-from pathlib import Path
-import shutil
-src=list((Path("data/train")).glob("*.jpg"))[:64]
-dst=Path("ptq/calibration"); dst.mkdir(parents=True,exist_ok=True)
-for p in src: shutil.copy2(p,dst/p.name)
-print(len(src))
-PY
+本仓库已经提供：
+
+```text
+vision/prepare_x5_calibration.py
 ```
 
-## 6. 理解 config.yaml
-OpenExplorer 不同版本字段可能略有区别，因此以你安装版本官方示例为准。至少要能解释：
+它会：
+
+1. 从 train/val 中抽样；
+2. 读取 RGB 图像；
+3. Resize 到 224×224；
+4. 转成 RGB；
+5. 转成 CHW；
+6. 保存为 float32 二进制；
+7. **不在 Python 中做 mean/std normalize**。
+
+原因：本仓库示例 YAML 会让 OpenExplorer 完成 mean/scale。  
+这样可以避免 Python 和 YAML 两边重复归一化。
+
+运行：
+
+```bash
+cd ~/RDK-study/vision
+source .venv/bin/activate
+
+python prepare_x5_calibration.py \
+  --num-samples 64 \
+  --output-dir ptq/calibration_rgb_f32
+```
+
+检查：
+
+```bash
+ls ptq/calibration_rgb_f32 | head
+cat ptq/calibration_manifest.csv | head
+```
+
+---
+
+## 6. 校准数据原则
+
+正式比赛数据要覆盖：
+
+- 直线；
+- 左弯；
+- 右弯；
+- 亮光；
+- 暗光；
+- 赛道居左/居中/居右；
+- 不同曝光；
+- 不同速度采集画面。
+
+不要：
+
+- 全挑“最好看的图片”；
+- 从 test 集选；
+- 用完全重复的相邻帧凑数量。
+
+建议 64–100 张起步。
+
+---
+
+## 7. YAML 模板
+
+仓库提供：
+
+```text
+vision/x5_ptq_config_template.yaml
+```
+
+**注意：OpenExplorer 不同版本字段名可能略有差异。**  
+因此模板用于“理解结构 + 快速起步”，最终以你安装版本的官方 sample config 为准。
+
+模板里要重点理解：
+
 - model_parameters
 - input_parameters
 - calibration_parameters
 - compiler_parameters
-- march / target
+- march
+- input_layout
+- input_type
+- norm_type
+- mean_value
+- scale_value
 
-不要只会复制 yaml。
+本仓库训练预处理是：
 
-## 7. Checker
-在 OpenExplorer 环境中，先运行模型检查。常见工具链会提供 hb_mapper checker/等价检查命令。
+```text
+RGB
+→ Resize(224,224)
+→ /255
+→ Normalize(mean,std)
+```
+
+因此模板把等价的 mean/std 通过 OpenExplorer 配置表达，而 Python 校准脚本只负责准备 RGB/CHW/float32 原始数值数据。
+
+---
+
+## 8. Checker
+
+进入 OpenExplorer 环境后，先运行当前版本对应的 checker。
+
+常见形式类似：
+
+```bash
+hb_mapper checker --model-type onnx --model lane_resnet18.onnx --march bayes-e
+```
+
+若你安装版本的命令参数不同，以：
+
+```bash
+hb_mapper checker --help
+```
+
+和官方文档为准。
 
 目标：
-- ONNX 能解析
-- 输入 shape 正确
-- 算子支持情况明确
-- 无意外 CPU fallback（如工具报告支持查看）
-- march 正确
 
-## 8. PTQ 与编译
-按照你安装版本的官方 quick start 执行 makertbin/convert/compile 流程，最终保留：
-- float ONNX
-- quantized ONNX / intermediate artifacts
-- final BIN
-- config.yaml
-- checker log
-- compiler log
+- ONNX 能解析；
+- 输入 shape 正确；
+- 算子支持情况明确；
+- march 正确；
+- 无明显不支持算子。
 
-## 9. 精度验证
-**BIN 生成不等于完成。**
+---
 
-至少比较 float ONNX 与量化模型在同一 test 上：
-- Mean 坐标漂移
-- P95 漂移
-- test MAE 变化
-- NaN/Inf
-- 模型大小
+## 9. PTQ / BIN 编译
 
-## 10. 静态工具
-若当前版本提供，运行并保存：
+按照安装版本官方 quick start 使用：
+
+```text
+checker
+→ makertbin / convert
+→ compiler
+→ BIN
+```
+
+必须保留：
+
+```text
+lane_resnet18.onnx
+quantized/intermediate model
+model.bin
+config.yaml
+checker.log
+compiler.log
+```
+
+---
+
+## 10. 静态检查
+
+如果当前版本提供以下工具：
+
 ```text
 hb_model_info
 hb_perf
 hb_verifier
 ```
-或官方文档中等价工具。
 
-## 11. 拿到 X5 后
+或官方等价工具，全部执行并保存日志。
+
+---
+
+## 11. 精度验证
+
+BIN 生成成功 ≠ PTQ 成功。
+
+至少比较：
+
+- Float ONNX
+- Quantized 模型
+
+在相同 test 集上的：
+
+- MAE
+- Mean drift
+- P95 drift
+- NaN / Inf
+- 模型大小
+
+如果量化后明显变差，要优先检查：
+
+1. 输入数据类型；
+2. RGB/BGR；
+3. HWC/CHW；
+4. mean/std 是否重复；
+5. /255 是否重复；
+6. Resize 是否一致；
+7. 校准集是否具有代表性。
+
+---
+
+## 12. 拿到 X5 后
+
 再补：
+
 ```text
-BIN → X5
-摄像头/NV12 → BPU
-BPU输出 → ROS2 Topic
-Foxglove/RViz验证
-控制节点订阅结果
+Camera / NV12
+    ↓
+X5 BPU
+    ↓
+BIN inference
+    ↓
+ROS2 Topic
+    ↓
+Decision / Control
 ```
 
+---
+
 ## 验收
-必须能回答：
+
+提交：
+
+```text
+ptq/
+├── calibration_rgb_f32/
+├── calibration_manifest.csv
+├── x5_ptq_config.yaml
+├── checker.log
+├── compiler.log
+└── model.bin
+```
+
+并回答：
+
 1. PTQ 与 QAT 区别？
-2. calibration data 为什么不能全用 test？
-3. 为什么 X5 需要 bayes-e？
-4. 为什么 ONNX 能运行还要转换 BIN？
-5. 为什么量化后必须重新做任务精度测试？
+2. 为什么 calibration data 不能全用 test？
+3. 为什么本仓库校准脚本不做 mean/std normalize？
+4. YAML 里为什么还需要 mean/scale？
+5. 为什么 X5 是 bayes-e？
+6. 为什么 ONNX 能运行还要转换 BIN？
