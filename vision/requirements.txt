@@ -1,7 +1,8 @@
-torch
-torchvision
-numpy
-opencv-python
-onnx
-onnxruntime
-pillow
+torch>=2.2,<2.10
+torchvision>=0.17,<0.25
+numpy>=1.26,<3
+opencv-python>=4.8,<5
+onnx>=1.16,<2
+onnxruntime>=1.18,<2
+onnxscript>=0.1,<1
+pillow>=10,<13
