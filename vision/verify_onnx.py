@@ -21,8 +21,7 @@ if not PT_PATH.exists():
 
 onnx.checker.check_model(onnx.load(str(ONNX_PATH)))
 
-torch_model = models.resnet18(weights=None)
-torch_model.fc = nn.Linear(torch_model.fc.in_features, 1)
+torch_model = build_model()
 torch_model.load_state_dict(torch.load(PT_PATH, map_location="cpu"))
 torch_model.eval()
 
