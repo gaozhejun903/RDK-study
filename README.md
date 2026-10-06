@@ -129,10 +129,13 @@ RDK-study/
 │               ├── number_subscriber.py
 │               └── square_driver.py
 ├── vision/
+│   ├── requirements.txt
 │   ├── generate_lane_dataset.py
 │   ├── train_resnet18.py
 │   ├── export_onnx.py
-│   └── verify_onnx.py
+│   ├── verify_onnx.py
+│   ├── prepare_x5_calibration.py
+│   └── x5_ptq_config_template.yaml
 └── scripts/
     ├── check_ros_env.sh
     └── check_topics.sh
