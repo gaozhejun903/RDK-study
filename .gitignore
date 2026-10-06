@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ROS2 build products
+build/
+install/
+log/
+
+# Vision generated data / models
+vision/data/
+vision/*.pt
+vision/*.onnx
+vision/train_meta.json
+
+# PTQ generated artifacts
+vision/ptq/
+vision/x5_build/
+*.bin
+
+# Maps / logs / local reports
+maps/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
