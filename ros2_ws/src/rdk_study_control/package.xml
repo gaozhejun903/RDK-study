@@ -5,8 +5,14 @@
   <description>RDK-study ROS2 beginner examples</description>
   <maintainer email="example@example.com">RDK-study</maintainer>
   <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
-  <export><build_type>ament_python</build_type></export>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
 </package>
